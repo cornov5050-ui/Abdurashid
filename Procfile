@@ -1,1 +1,2 @@
-web: gunicorn 08:app
+web: gunicorn server:app
+
